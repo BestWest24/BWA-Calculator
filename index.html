@@ -116,13 +116,30 @@ const COLORWAYS = {
 };
 
 // ── Pricing ───────────────────────────────────────────────────────────────────
-const PRINT_RATES = [
+const PRINT_RATES_FALLBACK = [
   { min:12,  max:35,   rates:[3.83,5.36,7.50,10.50,null, null ] },
   { min:36,  max:71,   rates:[2.76,3.87,5.41,7.58, 10.99,15.94] },
   { min:72,  max:144,  rates:[1.83,2.47,3.33,4.50, 6.52, 9.45 ] },
   { min:145, max:500,  rates:[1.23,1.66,2.25,3.03, 4.40, 6.38 ] },
   { min:501, max:1000, rates:[1.02,1.33,1.72,2.24, null, null ] },
 ];
+
+const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4JcxVnp5ZdnMK9SJmJlygJgSYirSSSkAR2fW4rcaNZpWk9jZ3BJc1WsZ2Vi-7iBFPjYJKoE4I0W-0/pub?gid=0&single=true&output=csv";
+
+function parseCSVRates(csv) {
+  const lines = csv.trim().split("\n").slice(1);
+  return lines.map(line => {
+    const cols = line.split(",").map(c => c.trim());
+    const min = parseInt(cols[0]);
+    const max = parseInt(cols[1]);
+    const rates = [cols[2],cols[3],cols[4],cols[5],cols[6],cols[7]].map(v =>
+      v === "" || v === undefined ? null : parseFloat(v)
+    );
+    return { min, max, rates };
+  }).filter(r => !isNaN(r.min) && !isNaN(r.max));
+}
+
+let PRINT_RATES = PRINT_RATES_FALLBACK;
 const SCREEN_NEW      = 19.00;
 const SCREEN_OVERSIZE = 22.00;
 const OVERSIZE_SURCHARGE = 0.75;
@@ -487,6 +504,22 @@ function ItemRow({ item, onChange, onRemove, onClear, groupQty, index }) {
 function App() {
   const [items, setItems] = useState([blankItem()]);
   const [breakdown, setBreakdown] = useState(null);
+  const [ratesStatus, setRatesStatus] = useState("loading"); // loading | live | fallback
+
+  React.useEffect(() => {
+    fetch(SHEET_CSV_URL)
+      .then(r => r.text())
+      .then(csv => {
+        const parsed = parseCSVRates(csv);
+        if (parsed.length > 0) {
+          PRINT_RATES = parsed;
+          setRatesStatus("live");
+        } else {
+          setRatesStatus("fallback");
+        }
+      })
+      .catch(() => setRatesStatus("fallback"));
+  }, []);
 
   const updateItem = useCallback((id,u)=>setItems(p=>p.map(it=>it.id===id?u:it)),[]);
   const removeItem = useCallback((id)=>setItems(p=>p.filter(it=>it.id!==id)),[]);
@@ -674,7 +707,13 @@ function App() {
           </div>
         </div>
         <div style={{ height:1, background:"linear-gradient(90deg,#8a6a30,transparent)" }} />
-        <p style={{ color:"#6a5a3a", fontSize:12, marginTop:8 }}>Best West Apparel catalog preloaded · Garments priced separately · Screen print only</p>
+        <p style={{ color:"#6a5a3a", fontSize:12, marginTop:8 }}>
+          Best West Apparel catalog preloaded · Garments priced separately · Screen print only
+          {" · "}
+          {ratesStatus === "loading" && <span style={{ color:"#8a8a40" }}>⏳ Loading live rates...</span>}
+          {ratesStatus === "live"    && <span style={{ color:"#6a9a50" }}>✓ Live rates loaded</span>}
+          {ratesStatus === "fallback"&& <span style={{ color:"#c07050" }}>⚠ Using fallback rates — check sheet</span>}
+        </p>
       </div>
 
       <div style={{ maxWidth:960, margin:"0 auto" }}>

@@ -125,6 +125,1039 @@ const PRINT_RATES_FALLBACK = [
 ];
 
 const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4JcxVnp5ZdnMK9SJmJlygJgSYirSSSkAR2fW4rcaNZpWk9jZ3BJc1WsZ2Vi-7iBFPjYJKoE4I0W-0/pub?gid=0&single=true&output=csv";
+const BLANK_RATES_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4JcxVnp5ZdnMK9SJmJlygJgSYirSSSkAR2fW4rcaNZpWk9jZ3BJc1WsZ2Vi-7iBFPjYJKoE4I0W-0/pub?gid=313022833&single=true&output=csv";
+
+let BLANK_RATES = []; // { appCode, supplier, sizes: { S, M, L, XL, "2XL", "3XL" } }
+
+function parseBlankRates(csv) {
+  const lines = csv.trim().split("\n").slice(1);
+  return lines.map(line => {
+    const cols = line.split(",").map(c => c.trim());
+    const appCode = cols[0];
+    const supplier = cols[1];
+    const sizes = { S: parseFloat(cols[2])||0, M: parseFloat(cols[3])||0, L: parseFloat(cols[4])||0, XL: parseFloat(cols[5])||0, "2XL": parseFloat(cols[6])||0, "3XL": parseFloat(cols[7])||0 };
+    return { appCode, supplier, sizes };
+  }).filter(r => r.appCode && r.supplier);
+}
+
+function getBlankSuppliers() {
+  const s = new Set(BLANK_RATES.map(r => r.supplier));
+  return [...s];
+}
+
+function getBlankRate(appCode, supplier, size) {
+  const row = BLANK_RATES.find(r => r.appCode === appCode && r.supplier === supplier);
+  return row ? (row.sizes[size] || 0) : 0;
+}
+
+function parseCSVRates(csv) {
+  const lines = csv.trim().split("\n").slice(1);
+  return lines.map(line => {
+    const cols = line.split(",").map(c => c.trim());
+    const min = parseInt(cols[0]);
+    const max = parseInt(cols[1]);
+    const rates = [cols[2],cols[3],cols[4],cols[5],cols[6],cols[7]].map(v =>
+      v === "" || v === undefined ? null : parseFloat(v)
+    );
+    return { min, max, rates };
+  }).filter(r => !isNaN(r.min) && !isNaN(r.max));
+}
+
+let PRINT_RATES = PRINT_RATES_FALLBACK;
+const SCREEN_NEW      = 19.00;
+const SCREEN_OVERSIZE = 22.00;
+const OVERSIZE_SURCHARGE = 0.75;
+const STAGING         = 0.20;
+const FLASH           = 0.10;
+const FLEECE_SURCHARGE   = 0.35;
+const POLY_SURCHARGE     = 0.35;
+const SLEEVE_SURCHARGE   = 1.00;
+const INK_CHANGE      = 12.00;
+
+const SPECIALTY = [
+  { label:"None", value:0 },
+  { label:"Puff / Neon / Metallic (+$1.13 avg)", value:1.13 },
+  { label:"Glitter (+$1.00)", value:1.00 },
+  { label:"Silver Reflective (+$1.75)", value:1.75 },
+  { label:"Glow in the Dark (+$1.25)", value:1.25 },
+];
+
+function getRate(totalQty, colors) {
+  if (colors < 1 || colors > 6) return null;
+  const b = PRINT_RATES.find(r => totalQty >= r.min && totalQty <= r.max);
+  return b ? b.rates[colors - 1] : null;
+}
+
+let _id = 0;
+const uid = () => ++_id;
+const blankItem = () => ({
+  id: uid(), styleCode:"", colorwayIndex:"",
+  qty:"", colors:1, locationType:"Standard",
+  printLocations:1,
+  specialtyInk:0, flash:true, whiteUnderbase:false,
+  staging:true, inkColorChanges:0, isReprint:true,
+  sizes:{ S:0, M:0, L:0, XL:0 },
+});
+
+// ── PDF Export ────────────────────────────────────────────────────────────────
+const TERMS = `TERMS & CONDITIONS
+By placing an order with Lost Art Design + Print, the customer agrees to the following:
+
+PAYMENT: A 50% deposit is required to begin production. The remaining balance is due upon completion, prior to shipment or pickup. We accept cash, check, and major credit cards.
+
+ARTWORK: Customer is responsible for supplying print-ready artwork. Lost Art Design + Print is not liable for errors in artwork submitted by the customer. Artwork setup or redraw fees may apply.
+
+PRODUCTION TOLERANCES: Screen printing is a manual process. Minor variations in color, placement (±¼"), and quantity (±2%) are within industry standards and not considered defects. Exact color matching is not guaranteed unless a PMS color match is specified and agreed upon in writing.
+
+MISPRINTS: A spoilage rate of up to 2% of the order quantity is considered acceptable in the screen printing industry. Lost Art will not be held responsible for garments that fall within this tolerance.
+
+GARMENT DEFECTS: We are not responsible for defects in garments supplied by the customer or purchased through our wholesale partners, including but not limited to mislabeled sizes, manufacturing inconsistencies, or damage during decoration. Claims on blank goods are subject to manufacturer policy.
+
+CANCELLATIONS & CHANGES: Orders may not be cancelled or changed once production has begun. Changes prior to production may be subject to a change fee.
+
+TURNAROUND: Standard turnaround is 10–14 business days from art approval and deposit. Rush orders are available at an additional fee. Lost Art Design + Print is not liable for delays caused by customer-related delays in artwork approval.
+
+SHIPPING & PICKUP: Orders shipped at customer's expense and risk. We are not responsible for damage or loss during transit. Customer is responsible for ensuring accuracy of shipping address.
+
+PRICING: This quote is valid for 30 days from the date of issue. Pricing is subject to change after this period or in the event of material cost increases.
+
+CONTACT: hello@lostartdesigns.com · 309.265.0547 · Peoria, IL`;
+
+function exportPDF(breakdown, items) {
+  const today = new Date().toLocaleDateString("en-US", { year:"numeric", month:"long", day:"numeric" });
+  const orderNum = "LA-" + Date.now().toString().slice(-6);
+
+  const itemRows = breakdown.lines.map(line => {
+    const detailRows = line.rows.map(r =>
+      `<tr><td style="padding:2px 8px 2px 24px;color:${r.warn?"#c0392b":r.info?"#27ae60":"#555"};font-size:13px">${r.d}</td><td style="padding:2px 8px;text-align:right;font-size:13px;color:${r.warn?"#c0392b":r.info?"#27ae60":"#555"}">${r.a>0?"$"+r.a.toFixed(2):""}</td></tr>`
+    ).join("");
+    return `
+      <tr style="background:#f9f5ee">
+        <td style="padding:8px;font-weight:bold;font-size:15px;border-top:1px solid #d4c4a0">${line.label}<span style="font-weight:normal;color:#888;font-size:13px;margin-left:8px">(${line.qty} pcs${line.numSizes > 1 ? ` · ${line.qtyPerSize}/size × ${line.numSizes} sizes` : ""})</span>${line.sizes&&line.sizes.length>0?`<span style="font-size:12px;color:#8a6030;background:#f5efe0;border:1px solid #d4c4a0;border-radius:10px;padding:1px 7px;margin-left:6px">${line.sizes.join(" · ")}</span>`:""}<br><span style="font-family:monospace;font-size:12px;color:#8a6030;font-weight:normal">${(line.skus||[]).map(e=>e.sku+" (" +e.qty+")").join("  ·  ")}</span></td>
+        <td style="padding:8px;text-align:right;font-weight:bold;font-size:15px;border-top:1px solid #d4c4a0">$${line.sub.toFixed(2)}<br><span style="font-size:12px;color:#8a6030;font-weight:normal">$${line.cpp.toFixed(2)}/shirt</span></td>
+      </tr>
+      ${detailRows}`;
+  }).join("");
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lost Art Design + Print — Order Estimate ${orderNum}</title>
+<style>
+  @page { margin: 18mm 16mm; }
+  body { font-family: Georgia, serif; color: #222; margin: 0; padding: 0; }
+  .page { max-width: 720px; margin: 0 auto; }
+  table { width: 100%; border-collapse: collapse; }
+  .terms { font-size: 9px; line-height: 1.6; color: #777; white-space: pre-line; border-top: 1px solid #ccc; padding-top: 12px; margin-top: 20px; }
+  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <table style="margin-bottom:20px">
+    <tr>
+      <td style="width:50%;vertical-align:middle">
+        <img src="${BWA_LOGO}" style="height:52px;display:block" alt="Best West Apparel" />
+        <div style="font-size:12px;color:#888;margin-top:4px">bestwestapparel.com</div>
+      </td>
+      <td style="text-align:right;vertical-align:top">
+        <div style="font-size:22px;font-weight:bold;color:#2c2c2c;letter-spacing:0.02em">Lost Art Design + Print</div>
+        <div style="font-size:13px;color:#888;margin-top:2px">hello@lostartdesigns.com · 309.265.0547 · Peoria, IL</div>
+        <div style="margin-top:8px">
+          <span style="font-size:12px;color:#aaa;text-transform:uppercase;letter-spacing:0.1em">Estimate #</span>
+          <span style="font-size:14px;font-weight:bold;color:#8a6030;margin-left:6px">${orderNum}</span>
+        </div>
+        <div style="font-size:12px;color:#aaa;margin-top:2px">Date: ${today}</div>
+      </td>
+    </tr>
+  </table>
+
+  <div style="height:2px;background:linear-gradient(90deg,#8a6030,#d4c4a0,transparent);margin-bottom:20px"></div>
+
+  <!-- Summary banner -->
+  <table style="margin-bottom:20px;background:#faf7f0;border:1px solid #d4c4a0;border-radius:6px">
+    <tr>
+      <td style="padding:12px 16px">
+        <div style="font-size:12px;color:#8a7a5a;text-transform:uppercase;letter-spacing:0.1em">Total Combined Quantity</div>
+        <div style="font-size:28px;font-weight:bold;color:#2c2c2c">${breakdown.totalQty} pcs</div>
+      </td>
+      <td style="padding:12px 16px;text-align:right">
+        <div style="font-size:12px;color:#8a7a5a;text-transform:uppercase;letter-spacing:0.1em">Total Print Charges</div>
+        <div style="font-size:28px;font-weight:bold;color:#8a6030">$${breakdown.grand.toFixed(2)}</div>
+        <div style="font-size:13px;color:#aaa;margin-top:2px">$${breakdown.avgCpp.toFixed(2)} avg/shirt · garments not included</div>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Line items -->
+  <table style="margin-bottom:24px;border:1px solid #d4c4a0;border-radius:6px;overflow:hidden">
+    <thead>
+      <tr style="background:#8a6030;color:#fff">
+        <th style="padding:10px;text-align:left;font-size:14px;text-transform:uppercase;letter-spacing:0.08em">Item / Detail</th>
+        <th style="padding:10px;text-align:right;font-size:14px;text-transform:uppercase;letter-spacing:0.08em">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${itemRows}
+      <tr style="background:#f0ebe0;border-top:2px solid #c0a040">
+        <td style="padding:12px;font-size:14px;font-weight:bold;color:#5a4010;text-transform:uppercase;letter-spacing:0.08em">Total Print Charges <span style="font-size:13px;font-weight:normal;color:#888">(garments not included)</span></td>
+        <td style="padding:12px;text-align:right;font-size:20px;font-weight:bold;color:#8a6030">$${breakdown.grand.toFixed(2)}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- Notes box -->
+  <div style="background:#faf7f0;border:1px solid #d4c4a0;border-radius:6px;padding:14px;font-size:13px;color:#555;line-height:1.7;margin-bottom:20px">
+    <strong style="color:#4a3010">Notes:</strong> Prices per print location. Garments priced separately.
+    Hoodies carry a fleece surcharge (+$0.35/pc). Pocket tees carry a sleeve surcharge (+$1.00/pc).
+    Shared ink colors across styles are de-duplicated for screen charges.
+    Screen charges waived at 72+ combined pieces.
+    Contact Lost Art for shipping, embroidery, CMYK, and jacket pricing.
+  </div>
+
+  <!-- Signature line -->
+  <table style="margin-bottom:24px">
+    <tr>
+      <td style="width:45%;border-top:1px solid #999;padding-top:6px;font-size:12px;color:#888">Customer Approval / Signature</td>
+      <td style="width:10%"></td>
+      <td style="width:45%;border-top:1px solid #999;padding-top:6px;font-size:12px;color:#888">Date</td>
+    </tr>
+  </table>
+
+  <!-- Terms -->
+  <div class="terms">${TERMS}</div>
+
+</div>
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type:"text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `LostArt-Estimate-${orderNum}.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+// ── UI Atoms ──────────────────────────────────────────────────────────────────
+const L  = { display:"block", color:"#8a7a5a", fontSize:"15px", textTransform:"uppercase", letterSpacing:"0.08em", marginBottom:"4px" };
+const IN = { background:"#110d06", border:"1px solid #4a3820", borderRadius:"4px", color:"#e8d5a0", fontSize:"15px", padding:"6px 10px", width:"100%", boxSizing:"border-box" };
+const SE = { ...IN, cursor:"pointer" };
+
+function Tip({ text }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span style={{ position:"relative", display:"inline-block", marginLeft:4, cursor:"help" }}
+      onMouseEnter={()=>setShow(true)} onMouseLeave={()=>setShow(false)}>
+      <span style={{ color:"#c0a060", fontSize:"15px", border:"1px solid #c0a060", borderRadius:"50%", padding:"0 4px" }}>?</span>
+      {show && <span style={{ position:"absolute", left:"110%", top:-4, background:"#1a1208", border:"1px solid #c0a060",
+        color:"#e8d5a0", fontSize:"15px", padding:"6px 10px", borderRadius:4, zIndex:100, width:200, lineHeight:1.4, whiteSpace:"normal" }}>{text}</span>}
+    </span>
+  );
+}
+
+function CB({ label, checked, onChange, tip }) {
+  return (
+    <label style={{ display:"flex", alignItems:"center", gap:5, cursor:"pointer", color:"#c8b88a", fontSize:"14px" }}>
+      <input type="checkbox" checked={checked} onChange={e=>onChange(e.target.checked)} style={{ accentColor:"#c0a060" }} />
+      {label}{tip && <Tip text={tip} />}
+    </label>
+  );
+}
+
+function Pill({ label, color="#3a2a10" }) {
+  return <span style={{ background:color, color:"#c8b88a", fontSize:"14px", padding:"2px 8px", borderRadius:20, border:"1px solid rgba(255,255,255,0.08)", letterSpacing:"0.04em" }}>{label}</span>;
+}
+
+function CostBadge({ amount, label }) {
+  return (
+    <div style={{ display:"inline-block", background:"linear-gradient(135deg,#4a3010,#7a5818)", border:"1px solid #c0a040", borderRadius:5, padding:"3px 10px", fontSize:"14px", color:"#e8c87a", letterSpacing:"0.04em", fontWeight:"bold" }}>
+      ${amount.toFixed(2)} {label}
+    </div>
+  );
+}
+
+// ── Item Row ──────────────────────────────────────────────────────────────────
+function ItemRow({ item, onChange, onRemove, onClear, groupQty, index }) {
+  const set = (k,v) => onChange({ ...item, [k]:v });
+  const cat = RAW_CATALOG.find(c=>c.styleCode===item.styleCode);
+  const cws = item.styleCode ? (COLORWAYS[item.styleCode]||[]) : [];
+  const cw  = cws[parseInt(item.colorwayIndex)];
+  const isPocket = cat && cat.appCode==="6030";
+  const sizeQtys = item.sizes || { S:0, M:0, L:0, XL:0 };
+  const activeSizes = Object.entries(sizeQtys).filter(([,v])=>(parseInt(v)||0)>0);
+  const totalQtyFromSizes = activeSizes.reduce((s,[,v])=>s+(parseInt(v)||0),0);
+  // Legacy shared-qty field still works if no per-size qtys entered
+  const legacyQty = parseInt(item.qty)||0;
+  const qty = totalQtyFromSizes > 0 ? totalQtyFromSizes : legacyQty;
+  const effectiveColors = item.colors + (item.whiteUnderbase?1:0);
+  const rate = getRate(groupQty, effectiveColors);
+
+  return (
+    <div style={{ background:"linear-gradient(135deg,#1e150a,#160f06)", border:"1px solid #4a3820", borderRadius:8, padding:18, marginBottom:12, position:"relative" }}>
+
+      {/* Row 1 — dropdowns */}
+      <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:12, alignItems:"flex-end" }}>
+        <div style={{ flex:"2 1 200px" }}>
+          <label style={L}>Style</label>
+          <select style={SE} value={item.styleCode} onChange={e=>onChange({...item, styleCode:e.target.value, colorwayIndex:""})}>
+            <option value="">— Select Style —</option>
+            {RAW_CATALOG.map(c=>(
+              <option key={c.styleCode} value={c.styleCode}>{c.styleName} ({c.styleCode} / {c.appCode})</option>
+            ))}
+          </select>
+        </div>
+
+        {item.styleCode && (
+          <div style={{ flex:"2 1 180px" }}>
+            <label style={L}>Colorway</label>
+            <select style={SE} value={item.colorwayIndex} onChange={e=>set("colorwayIndex",e.target.value)}>
+              <option value="">— Select Colorway —</option>
+              {cws.map((c,i)=><option key={i} value={i}>{c.garmentColor} / {c.inkColor}</option>)}
+            </select>
+          </div>
+        )}
+
+
+
+        <div style={{ flex:"0 0 74px" }}>
+          <label style={L}>Colors<Tip text="Ink colors in design. White underbase is added separately." /></label>
+          <select style={SE} value={item.colors} onChange={e=>set("colors",parseInt(e.target.value))}>
+            {[1,2,3,4,5,6].map(n=><option key={n} value={n}>{n}</option>)}
+          </select>
+        </div>
+
+        <div style={{ flex:"1 1 130px" }}>
+          <label style={L}>Location</label>
+          <select style={SE} value={item.locationType} onChange={e=>set("locationType",e.target.value)}>
+            {["Standard","Sleeve/Pocket","Oversized"].map(t=><option key={t}>{t}</option>)}
+          </select>
+        </div>
+
+        <div style={{ flex:"0 0 110px" }}>
+          <label style={L}>Print Locations<Tip text="1 = single location (e.g. front only). 2 = two locations (e.g. front + back). Lot size is based on total garments, not locations. Print cost doubles for 2 locations." /></label>
+          <select style={SE} value={item.printLocations||1} onChange={e=>set("printLocations",parseInt(e.target.value))}>
+            <option value={1}>1 — Single</option>
+            <option value={2}>2 — Front + Back</option>
+          </select>
+        </div>
+
+        <div style={{ flex:"1 1 200px" }}>
+          <label style={L}>Specialty Ink</label>
+          <select style={SE} value={item.specialtyInk} onChange={e=>set("specialtyInk",parseFloat(e.target.value))}>
+            {SPECIALTY.map(o=><option key={o.label} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* Auto-detected pills */}
+      {cat && (
+        <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:12 }}>
+          <Pill label={`Apparel: ${cat.appCode}`} />
+          <Pill label={`Type: ${cat.garmentType}`} color="#3a4a2a" />
+          {isPocket && <Pill label="Pocket — sleeve surcharge applies" color="#3a3a5a" />}
+          {cw && <Pill label={`Ink: ${cw.inkColor}`} color="#4a3020" />}
+        </div>
+      )}
+
+      {/* Sizes — per-size qty inputs */}
+      <div style={{ display:"flex", flexWrap:"wrap", gap:14, alignItems:"flex-end", marginBottom:10 }}>
+        <label style={{ ...L, marginBottom:0, marginRight:4, alignSelf:"center" }}>Qty by Size:</label>
+        {["S","M","L","XL"].map(sz=>(
+          <div key={sz} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}>
+            <label style={{ ...L, marginBottom:0, fontSize:"14px" }}>{sz}</label>
+            <input type="number" min="0" style={{ ...IN, width:58, textAlign:"center" }}
+              value={sizeQtys[sz]||0}
+              onChange={e=>set("sizes",{...sizeQtys,[sz]:parseInt(e.target.value)||0})} />
+          </div>
+        ))}
+        {qty > 0 && (
+          <span style={{ color:"#c0a060", fontSize:"14px", alignSelf:"center", marginLeft:4 }}>
+            = <strong>{qty}</strong> total
+          </span>
+        )}
+        {qty === 0 && (
+          <span style={{ color:"#5a4a30", fontSize:"15px", fontStyle:"italic", alignSelf:"center" }}>enter qty per size</span>
+        )}
+      </div>
+
+      {/* Options */}
+      <div style={{ display:"flex", flexWrap:"wrap", gap:12, alignItems:"center" }}>
+        <CB label="Flash" checked={item.flash} onChange={v=>set("flash",v)}
+          tip="+$0.10/print/location. Usually needed on dark fabrics or with white ink." />
+        <CB label="White Underbase" checked={item.whiteUnderbase} onChange={v=>set("whiteUnderbase",v)}
+          tip="Counts as an additional color. Needed for bright colors on dark garments." />
+        <CB label="Staging (+$0.20/item)" checked={item.staging} onChange={v=>set("staging",v)}
+          tip="Sorting, counting, unwrapping incoming shipments." />
+        <CB label="Reprint (screens on file)" checked={item.isReprint} onChange={v=>set("isReprint",v)}
+          tip="Skips screen charge if screens exist within 1 year. Min 24 pcs." />
+        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+          <label style={{ ...L, marginBottom:0 }}>Ink Changes<Tip text="+$12.00 per ink color change within the run." /></label>
+          <input type="number" min="0" style={{ ...IN, width:55 }} value={item.inkColorChanges}
+            onChange={e=>set("inkColorChanges",parseInt(e.target.value)||0)} />
+        </div>
+      </div>
+
+      {/* Rate preview */}
+      {qty > 0 && (
+        <div style={{ marginTop:10, padding:"7px 12px", background:"#0e0a04", borderRadius:4, border:"1px solid #3a2c18" }}>
+          {activeSizes.length > 0 && (
+            <div style={{ color:"#8a7a5a", fontSize:11, marginBottom:3 }}>
+              {activeSizes.map(([sz,v])=>`${sz}:${v}`).join(" + ")} = <strong style={{ color:"#c0a060" }}>{qty} total pcs</strong>
+            </div>
+          )}
+          {rate !== null
+            ? <span style={{ color:"#c0a060", fontSize:"14px" }}>Rate at {groupQty} same-ink qty: <strong>${rate.toFixed(2)}</strong>/location{item.locationType==="Oversized"&&<> + <strong>$0.75</strong> oversize</>}{(item.printLocations||1)===2&&<> × <strong>2 locations</strong></>}</span>
+            : <span style={{ color:"#e05050", fontSize:"14px" }}>⚠ No standard rate for {groupQty} qty + {effectiveColors} colors — quote required</span>}
+        </div>
+      )}
+
+      <button onClick={onRemove} style={{ position:"absolute", top:14, right:14, background:"none", border:"1px solid #4a2020", color:"#a05050", borderRadius:4, padding:"2px 8px", cursor:"pointer", fontSize:12 }}>✕</button>
+      <button onClick={onClear} style={{ position:"absolute", top:14, right:52, background:"none", border:"1px solid #3a3a20", color:"#8a8a50", borderRadius:4, padding:"2px 8px", cursor:"pointer", fontSize:12 }}>Clear</button>
+    </div>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
+function App() {
+  const [items, setItems] = useState([blankItem()]);
+  const [breakdown, setBreakdown] = useState(null);
+  const [ratesStatus, setRatesStatus] = useState("loading"); // loading | live | fallback
+
+  React.useEffect(() => {
+    fetch(SHEET_CSV_URL)
+      .then(r => r.text())
+      .then(csv => {
+        const parsed = parseCSVRates(csv);
+        if (parsed.length > 0) { PRINT_RATES = parsed; setRatesStatus("live"); }
+        else { setRatesStatus("fallback"); }
+      })
+      .catch(() => setRatesStatus("fallback"));
+
+    fetch(BLANK_RATES_URL)
+      .then(r => r.text())
+      .then(csv => { BLANK_RATES = parseBlankRates(csv); });
+  }, []);
+
+  const updateItem = useCallback((id,u)=>setItems(p=>p.map(it=>it.id===id?u:it)),[]);
+  const removeItem = useCallback((id)=>setItems(p=>p.filter(it=>it.id!==id)),[]);
+  const addItem = ()=>setItems(p=>[...p,blankItem()]);
+
+  const getItemEffectiveQty = (item) => {
+    const sizes = item.sizes || {};
+    const fromSizes = Object.values(sizes).reduce((s,v)=>s+(parseInt(v)||0),0);
+    return fromSizes > 0 ? fromSizes : (parseInt(item.qty)||0);
+  };
+
+  const totalQty = items.reduce((s,it)=>s+getItemEffectiveQty(it),0);
+
+  // Build per-ink-color group quantities for bracket pricing
+  // Items sharing the same styleCode AND ink color pool their qty.
+  // Same ink color on a different style does NOT qualify — different style = different run.
+  const getInkKey = (item) => {
+    const cws = item.styleCode ? (COLORWAYS[item.styleCode]||[]) : [];
+    const cw = cws[parseInt(item.colorwayIndex)];
+    const inkPart = cw ? cw.inkColor.toLowerCase().trim() : `__uid_${item.id}__`;
+    return item.styleCode ? `${item.styleCode}::${inkPart}` : `__uid_${item.id}__`;
+  };
+
+  const inkGroupQty = {};
+  items.forEach(item => {
+    const qty = getItemEffectiveQty(item);
+    if (!qty) return;
+    const key = getInkKey(item);
+    inkGroupQty[key] = (inkGroupQty[key]||0) + qty;
+  });
+
+  const bracketTextForQty = (qty) => {
+    if (!qty) return "";
+    if (qty<12)  return "Under minimum (12) — use DTF";
+    if (qty<36)  return "Bracket: 12–35 pcs";
+    if (qty<72)  return "Bracket: 36–71 pcs";
+    if (qty<145) return "Bracket: 72–144 pcs · screens waived";
+    if (qty<501) return "Bracket: 145–500 pcs · screens waived";
+    if (qty<1001)return "Bracket: 501–1,000 pcs";
+    return "1,001+ pcs — quote required";
+  };
+
+  const bracketText = () => bracketTextForQty(totalQty);
+
+  const exportBlankPO = () => {
+    const suppliers = getBlankSuppliers();
+    const supplierChoice = suppliers.length === 1 ? suppliers[0] : window.prompt(
+      "Select supplier:\n" + suppliers.map((s,i) => `${i+1}. ${s}`).join("\n") + "\n\nType the supplier name exactly:"
+      , suppliers[0]);
+    if (!supplierChoice) return;
+
+    const today = new Date().toLocaleDateString("en-US", { year:"numeric", month:"long", day:"numeric" });
+    const poNum = "PO-" + Date.now().toString().slice(-6);
+
+    // Build line items grouped by appCode + garmentColor
+    const lineMap = {};
+    items.forEach(item => {
+      const cat = RAW_CATALOG.find(c => c.styleCode === item.styleCode);
+      if (!cat) return;
+      const cws = COLORWAYS[item.styleCode] || [];
+      const cw = cws[parseInt(item.colorwayIndex)];
+      if (!cw) return;
+      const sizeMap = item.sizes || {};
+      const activeSizes = Object.entries(sizeMap).filter(([,v]) => (parseInt(v)||0) > 0);
+      if (!activeSizes.length) return;
+      const key = `${cat.appCode}::${cw.garmentColor}`;
+      if (!lineMap[key]) lineMap[key] = { appCode: cat.appCode, styleName: cat.styleName, garmentColor: cw.garmentColor, supplier: supplierChoice, sizes: {} };
+      activeSizes.forEach(([sz, v]) => {
+        lineMap[key].sizes[sz] = (lineMap[key].sizes[sz] || 0) + (parseInt(v)||0);
+      });
+    });
+
+    const lines = Object.values(lineMap);
+    if (!lines.length) { alert("No items with sizes selected."); return; }
+
+    // Build print cost lookup per appCode
+    const printCostMap = {};
+    if (breakdown) {
+      breakdown.lines.forEach(line => {
+        const item = items.find(it => {
+          const cat = RAW_CATALOG.find(c => c.styleCode === it.styleCode);
+          const cws = COLORWAYS[it.styleCode]||[];
+          const cw = cws[parseInt(it.colorwayIndex)];
+          const lbl = cat ? `${cat.styleName}${cw ? ` — ${cw.garmentColor} / ${cw.inkColor}` : ""}` : "";
+          return lbl === line.label;
+        });
+        if (item) {
+          const cat = RAW_CATALOG.find(c => c.styleCode === item.styleCode);
+          if (cat) printCostMap[cat.appCode] = (printCostMap[cat.appCode] || 0) + line.cpp;
+        }
+      });
+    }
+
+    let grandBlank = 0;
+    let grandPrint = 0;
+    let grandTotal = 0;
+    let grandQty = 0;
+
+    const rowsHtml = lines.map(line => {
+      const sizeOrder = ["S","M","L","XL","2XL","3XL"];
+      const activeSizes = sizeOrder.filter(sz => (line.sizes[sz]||0) > 0);
+      const qty = activeSizes.reduce((s,sz) => s + (line.sizes[sz]||0), 0);
+      const blankCpp = activeSizes.length > 0
+        ? activeSizes.reduce((s,sz) => s + getBlankRate(line.appCode, supplierChoice, sz) * (line.sizes[sz]||0), 0) / qty
+        : 0;
+      const blankTotal = activeSizes.reduce((s,sz) => s + getBlankRate(line.appCode, supplierChoice, sz) * (line.sizes[sz]||0), 0);
+      const printCpp = printCostMap[line.appCode] || 0;
+      const printTotal = printCpp * qty;
+      const landedCpp = blankCpp + printCpp;
+      const landedTotal = blankTotal + printTotal;
+
+      grandBlank += blankTotal;
+      grandPrint += printTotal;
+      grandTotal += landedTotal;
+      grandQty += qty;
+
+      const sizeCells = sizeOrder.map(sz => `<td style="padding:6px 8px;text-align:center;font-size:13px;border:1px solid #e0d8c8">${(line.sizes[sz]||0) > 0 ? line.sizes[sz] : "—"}</td>`).join("");
+
+      return `<tr>
+        <td style="padding:6px 8px;font-size:13px;border:1px solid #e0d8c8;font-weight:bold">${line.styleName}</td>
+        <td style="padding:6px 8px;font-size:13px;border:1px solid #e0d8c8">${line.appCode}</td>
+        <td style="padding:6px 8px;font-size:13px;border:1px solid #e0d8c8">${line.garmentColor}</td>
+        ${sizeCells}
+        <td style="padding:6px 8px;text-align:center;font-size:13px;border:1px solid #e0d8c8;font-weight:bold">${qty}</td>
+        <td style="padding:6px 8px;text-align:right;font-size:13px;border:1px solid #e0d8c8">$${blankCpp.toFixed(2)}</td>
+        <td style="padding:6px 8px;text-align:right;font-size:13px;border:1px solid #e0d8c8">$${blankTotal.toFixed(2)}</td>
+        <td style="padding:6px 8px;text-align:right;font-size:13px;border:1px solid #e0d8c8">$${printCpp.toFixed(2)}</td>
+        <td style="padding:6px 8px;text-align:right;font-size:13px;border:1px solid #e0d8c8">$${printTotal.toFixed(2)}</td>
+        <td style="padding:6px 8px;text-align:right;font-size:13px;border:1px solid #e0d8c8;font-weight:bold;color:#8a6030">$${landedCpp.toFixed(2)}</td>
+        <td style="padding:6px 8px;text-align:right;font-size:13px;border:1px solid #e0d8c8;font-weight:bold;color:#8a6030">$${landedTotal.toFixed(2)}</td>
+      </tr>`;
+    }).join("");
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Blank Purchase Order ${poNum}</title>
+<style>
+  @page { margin: 16mm; }
+  body { font-family: Georgia, serif; color: #222; margin: 0; padding: 0; }
+  .page { max-width: 900px; margin: 0 auto; }
+  table { width: 100%; border-collapse: collapse; }
+  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <table style="margin-bottom:20px">
+    <tr>
+      <td style="vertical-align:top">
+        <div style="font-size:22px;font-weight:bold;color:#2c2c2c">Best West Apparel</div>
+        <div style="font-size:13px;color:#888;margin-top:2px">bestwestapparel.com</div>
+      </td>
+      <td style="text-align:right;vertical-align:top">
+        <div style="font-size:20px;font-weight:bold;color:#8a6030">Blank Purchase Order</div>
+        <div style="font-size:13px;color:#888;margin-top:2px">Supplier: <strong style="color:#333">${supplierChoice}</strong></div>
+        <div style="font-size:12px;color:#aaa;margin-top:4px">PO # ${poNum} · ${today}</div>
+      </td>
+    </tr>
+  </table>
+
+  <div style="height:2px;background:linear-gradient(90deg,#8a6030,#d4c4a0,transparent);margin-bottom:20px"></div>
+
+  <table style="margin-bottom:8px;background:#faf7f0;border:1px solid #d4c4a0;border-radius:6px">
+    <tr>
+      <td style="padding:12px 16px">
+        <div style="font-size:11px;color:#8a7a5a;text-transform:uppercase;letter-spacing:0.1em">Total Pieces</div>
+        <div style="font-size:26px;font-weight:bold;color:#2c2c2c">${grandQty} pcs</div>
+      </td>
+      <td style="padding:12px 16px;text-align:center">
+        <div style="font-size:11px;color:#8a7a5a;text-transform:uppercase;letter-spacing:0.1em">Blank Cost</div>
+        <div style="font-size:22px;font-weight:bold;color:#555">$${grandBlank.toFixed(2)}</div>
+      </td>
+      <td style="padding:12px 16px;text-align:center">
+        <div style="font-size:11px;color:#8a7a5a;text-transform:uppercase;letter-spacing:0.1em">Print Cost</div>
+        <div style="font-size:22px;font-weight:bold;color:#555">$${grandPrint.toFixed(2)}</div>
+      </td>
+      <td style="padding:12px 16px;text-align:right">
+        <div style="font-size:11px;color:#8a7a5a;text-transform:uppercase;letter-spacing:0.1em">Total Landed Cost</div>
+        <div style="font-size:26px;font-weight:bold;color:#8a6030">$${grandTotal.toFixed(2)}</div>
+        <div style="font-size:12px;color:#aaa">$${grandQty > 0 ? (grandTotal/grandQty).toFixed(2) : "0.00"} avg/shirt</div>
+      </td>
+    </tr>
+  </table>
+
+  <table style="margin-bottom:24px;border:1px solid #d4c4a0;font-size:13px">
+    <thead>
+      <tr style="background:#8a6030;color:#fff">
+        <th style="padding:8px;text-align:left">Style</th>
+        <th style="padding:8px;text-align:left">Code</th>
+        <th style="padding:8px;text-align:left">Color</th>
+        <th style="padding:8px;text-align:center">S</th>
+        <th style="padding:8px;text-align:center">M</th>
+        <th style="padding:8px;text-align:center">L</th>
+        <th style="padding:8px;text-align:center">XL</th>
+        <th style="padding:8px;text-align:center">2XL</th>
+        <th style="padding:8px;text-align:center">3XL</th>
+        <th style="padding:8px;text-align:center">Qty</th>
+        <th style="padding:8px;text-align:right">Blank/ea</th>
+        <th style="padding:8px;text-align:right">Blank $</th>
+        <th style="padding:8px;text-align:right">Print/ea</th>
+        <th style="padding:8px;text-align:right">Print $</th>
+        <th style="padding:8px;text-align:right">Landed/ea</th>
+        <th style="padding:8px;text-align:right">Landed $</th>
+      </tr>
+    </thead>
+    <tbody>${rowsHtml}</tbody>
+    <tfoot>
+      <tr style="background:#f0ebe0;border-top:2px solid #c0a040;font-weight:bold">
+        <td colspan="10" style="padding:10px 8px;font-size:14px;color:#5a4010;text-transform:uppercase;letter-spacing:0.06em">Totals</td>
+        <td style="padding:10px 8px;text-align:right;font-size:13px"></td>
+        <td style="padding:10px 8px;text-align:right;font-size:14px;color:#555">$${grandBlank.toFixed(2)}</td>
+        <td style="padding:10px 8px;text-align:right;font-size:13px"></td>
+        <td style="padding:10px 8px;text-align:right;font-size:14px;color:#555">$${grandPrint.toFixed(2)}</td>
+        <td style="padding:10px 8px;text-align:right;font-size:13px"></td>
+        <td style="padding:10px 8px;text-align:right;font-size:16px;color:#8a6030">$${grandTotal.toFixed(2)}</td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <div style="font-size:11px;color:#999;border-top:1px solid #ddd;padding-top:10px">
+    Print costs ${breakdown ? "pulled from current calculator session" : "not calculated — run Calculate Total first for accurate landed costs"}.
+    Blank prices sourced from supplier sheet. Verify pricing before placing order.
+  </div>
+
+</div>
+</body>
+</html>`;
+
+    const blob = new Blob([html], { type:"text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `BlankPO-${poNum}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
+
+  const calculate = () => {
+    const charged = new Set();
+    let grand = 0;
+    const lines = [];
+
+    items.forEach(item=>{
+      const sizeMap = item.sizes || {};
+      const activeSizeEntries = Object.entries(sizeMap).filter(([,v])=>(parseInt(v)||0)>0);
+      const selectedSizes = activeSizeEntries.map(([k])=>k);
+      const numSizes = selectedSizes.length;
+      const qtyFromSizes = activeSizeEntries.reduce((s,[,v])=>s+(parseInt(v)||0),0);
+      const qty = qtyFromSizes > 0 ? qtyFromSizes : (parseInt(item.qty)||0);
+      const qtyPerSize = numSizes > 0 ? Math.round(qty / numSizes) : qty;
+      if (!qty) return;
+      const cat = RAW_CATALOG.find(c=>c.styleCode===item.styleCode);
+      const cws = item.styleCode?(COLORWAYS[item.styleCode]||[]):[];
+      const cw  = cws[parseInt(item.colorwayIndex)];
+      const isPocket = cat && cat.appCode==="6030";
+      const gType = cat ? cat.garmentType : "Standard";
+      const effectiveColors = item.colors+(item.whiteUnderbase?1:0);
+      // Use ink-group qty for bracket pricing, not blind total
+      const inkKey = getInkKey(item);
+      const groupQty = inkGroupQty[inkKey] || qty;
+      const rate = getRate(groupQty, effectiveColors);
+      const label = cat
+        ? `${cat.styleName}${cw?` — ${cw.garmentColor} / ${cw.inkColor}`:""}`
+        : `Item #${item.id}`;
+
+      // SKU: Style-AppCode-GarmentColor-InkColor-Size (one per selected size, or base if none)
+      const skuBase = [
+        item.styleCode || "???",
+        cat ? cat.appCode : "???",
+        cw ? cw.garmentColor.replace(/\s+/g,"-") : "???",
+        cw ? cw.inkColor.replace(/\s+/g,"-")    : "???",
+      ].join("-");
+      const skus = activeSizeEntries.length > 0
+        ? activeSizeEntries.map(([sz, v]) => ({ sku:`${skuBase}-${sz}`, qty:parseInt(v)||0 }))
+        : [{ sku:skuBase, qty }];
+
+      const rows = [];
+      let sub = 0;
+
+      // Print
+      if (rate!==null) {
+        const locs = item.printLocations || 1;
+        const c=rate*qty*locs; sub+=c;
+        rows.push({ d:`Print (${effectiveColors} color${effectiveColors>1?"s":""} × ${qty} @ $${rate.toFixed(2)}${locs===2?" × 2 locations":""}, group qty ${groupQty})`, a:c });
+      } else {
+        rows.push({ d:`⚠ Print: QUOTE REQUIRED (${effectiveColors} colors, ${groupQty} group qty)`, a:0, warn:true });
+      }
+
+      // Oversize
+      if (item.locationType==="Oversized") {
+        const c=OVERSIZE_SURCHARGE*qty; sub+=c;
+        rows.push({ d:`Oversize surcharge (${qty} × $${OVERSIZE_SURCHARGE})`, a:c });
+      }
+
+      // Sleeve/pocket
+      if (item.locationType==="Sleeve/Pocket" || isPocket) {
+        const c=SLEEVE_SURCHARGE*qty; sub+=c;
+        rows.push({ d:`Sleeve/pocket surcharge (${qty} × $${SLEEVE_SURCHARGE})`, a:c });
+      }
+
+      // Garment type
+      if (gType==="Fleece") {
+        const c=FLEECE_SURCHARGE*qty; sub+=c;
+        rows.push({ d:`Fleece print surcharge (${qty} × $${FLEECE_SURCHARGE})`, a:c });
+      }
+      if (gType==="Polyester") {
+        const c=POLY_SURCHARGE*qty; sub+=c;
+        rows.push({ d:`Polyester surcharge (${qty} × $${POLY_SURCHARGE})`, a:c });
+      }
+
+      // Flash
+      if (item.flash) {
+        const c=FLASH*qty; sub+=c;
+        rows.push({ d:`Flash (${qty} × $${FLASH})`, a:c });
+      }
+
+      // Staging
+      if (item.staging) {
+        const c=STAGING*qty; sub+=c;
+        rows.push({ d:`Staging (${qty} × $${STAGING})`, a:c });
+      }
+
+      // Specialty ink
+      if (item.specialtyInk>0) {
+        const c=item.specialtyInk*qty; sub+=c;
+        rows.push({ d:`Specialty ink (${qty} × $${item.specialtyInk.toFixed(2)})`, a:c });
+      }
+
+      // Ink color changes
+      if (item.inkColorChanges>0) {
+        const c=item.inkColorChanges*INK_CHANGE; sub+=c;
+        rows.push({ d:`Ink color changes (${item.inkColorChanges} × $${INK_CHANGE})`, a:c });
+      }
+
+      // Screen charges
+      if (!item.isReprint && groupQty<72) {
+        const sc = item.locationType==="Oversized" ? SCREEN_OVERSIZE : SCREEN_NEW;
+        let newScreens=0; const names=[];
+
+        if (!charged.has(inkKey)) { charged.add(inkKey); newScreens++; names.push(cw?cw.inkColor:"(unnamed ink)"); }
+
+        for (let i=1;i<item.colors;i++) { newScreens++; names.push(`Extra color ${i}`); }
+
+        if (item.whiteUnderbase && !charged.has("__underbase__")) {
+          charged.add("__underbase__"); newScreens++; names.push("White underbase");
+        }
+
+        if (newScreens>0) {
+          const c=newScreens*sc; sub+=c;
+          rows.push({ d:`Screen charges (${newScreens} × $${sc}: ${names.join(", ")})`, a:c });
+        } else {
+          rows.push({ d:`Screen charges: $0 — ink color shared with prior item`, a:0, info:true });
+        }
+      } else if (item.isReprint) {
+        rows.push({ d:`Screen charges: $0 — reprint, screens on file`, a:0, info:true });
+      } else {
+        rows.push({ d:`Screen charges: $0 — waived at 72+ pcs (group qty ${groupQty})`, a:0, info:true });
+      }
+
+      grand += sub;
+      lines.push({ label, qty, numSizes, groupQty, sub, rows, cpp: qty>0 ? sub/qty : 0, sizes: selectedSizes, skus });
+    });
+
+    setBreakdown({ lines, grand, totalQty, avgCpp: totalQty>0 ? grand/totalQty : 0, inkGroupQty });
+  };
+
+  return (
+    <div style={{ minHeight:"100vh", background:"radial-gradient(ellipse at 20% 20%,#1a1005,#0a0704 60%,#000)", fontFamily:"Georgia,serif", color:"#e8d5a0", padding:"30px 20px" }}>
+      <style>{`*{box-sizing:border-box}input:focus,select:focus{outline:1px solid #c0a060}::placeholder{color:#5a4a30}input[type=number]::-webkit-inner-spin-button{opacity:.6;transform:scale(1.3);transform-origin:right center}select option{background:#1a1208}`}</style>
+
+      {/* Header */}
+      <div style={{ maxWidth:960, margin:"0 auto 28px" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:20, marginBottom:10 }}>
+          <img src={BWA_LOGO} style={{ height:44, filter:"brightness(0) invert(1) sepia(1) saturate(0.5) hue-rotate(0deg)", opacity:0.85 }} alt="Best West Apparel" />
+          <div>
+            <h1 style={{ margin:0, fontSize:24, color:"#e8c87a", letterSpacing:"0.02em" }}>Lost Art Design + Print</h1>
+            <span style={{ color:"#6a5a3a", fontSize:11, letterSpacing:"0.15em", textTransform:"uppercase" }}>Contract Screen Print Pricing Calculator</span>
+          </div>
+        </div>
+        <div style={{ height:1, background:"linear-gradient(90deg,#8a6a30,transparent)" }} />
+        <p style={{ color:"#6a5a3a", fontSize:12, marginTop:8 }}>
+          Best West Apparel catalog preloaded · Garments priced separately · Screen print only
+          {" · "}
+          {ratesStatus === "loading" && <span style={{ color:"#8a8a40" }}>⏳ Loading live rates...</span>}
+          {ratesStatus === "live"    && <span style={{ color:"#6a9a50" }}>✓ Live rates loaded</span>}
+          {ratesStatus === "fallback"&& <span style={{ color:"#c07050" }}>⚠ Using fallback rates — check sheet</span>}
+        </p>
+      </div>
+
+      <div style={{ maxWidth:960, margin:"0 auto" }}>
+
+        {/* Qty banner */}
+        <div style={{ background:"#1a1208", border:"1px solid #5a4a20", borderRadius:6, padding:"10px 16px", marginBottom:20 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom: Object.keys(inkGroupQty).length > 1 ? 8 : 0 }}>
+            <span style={{ color:"#8a7a5a", fontSize:11, textTransform:"uppercase", letterSpacing:"0.1em" }}>Total Qty:</span>
+            <span style={{ color:"#e8c87a", fontSize:22, fontWeight:"bold" }}>{totalQty}</span>
+            {totalQty>0 && <span style={{ color:"#7a6a4a", fontSize:12 }}>{bracketText()}</span>}
+          </div>
+          {Object.keys(inkGroupQty).length > 1 && (
+            <div style={{ borderTop:"1px solid #3a2c18", paddingTop:8 }}>
+              <span style={{ color:"#6a5a3a", fontSize:11, textTransform:"uppercase", letterSpacing:"0.08em" }}>Ink Groups (bracket pricing per group): </span>
+              {Object.entries(inkGroupQty).map(([k,v],i)=>{
+                const parts = k.split("::");
+                const dispStyle = parts[0] || k;
+                const dispInk = parts[1] ? parts[1].replace(/\b\w/g,c=>c.toUpperCase()) : "";
+                return (
+                  <span key={i} style={{ display:"inline-block", marginLeft:8, color:"#c0a060", fontSize:12, background:"#2a1e08", border:"1px solid #4a3820", borderRadius:4, padding:"1px 8px" }}>
+                    {dispStyle} / {dispInk}: <strong>{v} pcs</strong> — {bracketTextForQty(v)}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Items */}
+        {items.map((it,i)=>(
+          <ItemRow key={it.id} item={it} index={i} groupQty={inkGroupQty[getInkKey(it)]||parseInt(it.qty)||0}
+            onChange={u=>updateItem(it.id,u)} onRemove={()=>removeItem(it.id)}
+            onClear={()=>updateItem(it.id,{...blankItem(), id:it.id})} />
+        ))}
+
+        {/* Add */}
+        <button onClick={addItem} style={{ width:"100%", padding:12, marginBottom:20, background:"none", border:"1px dashed #4a3820", borderRadius:8, color:"#8a7a5a", fontSize:13, cursor:"pointer", letterSpacing:"0.08em" }}
+          onMouseEnter={e=>{e.target.style.borderColor="#c0a060";e.target.style.color="#c0a060"}}
+          onMouseLeave={e=>{e.target.style.borderColor="#4a3820";e.target.style.color="#8a7a5a"}}>
+          + Add Another Style / Colorway
+        </button>
+
+        {/* Calculate + Export row */}
+        <div style={{ display:"flex", gap:12, marginBottom:30 }}>
+          <button onClick={calculate} style={{ flex:2, padding:14, background:"linear-gradient(135deg,#8a6010,#c0a040)", border:"none", borderRadius:8, color:"#0a0704", fontSize:15, fontWeight:"bold", letterSpacing:"0.15em", textTransform:"uppercase", cursor:"pointer" }}>
+            Calculate Total
+          </button>
+          <button onClick={exportBlankPO} style={{ flex:1, padding:14, background:"linear-gradient(135deg,#1a3a20,#2a6030)", border:"1px solid #4a8a50", borderRadius:8, color:"#a0e0a0", fontSize:13, fontWeight:"bold", letterSpacing:"0.1em", textTransform:"uppercase", cursor:"pointer" }}>
+            ⬇ Export Blank PO
+          </button>
+        </div>
+
+        {/* Breakdown */}
+        {breakdown && (
+          <div style={{ background:"linear-gradient(135deg,#1a1208,#110d06)", border:"1px solid #6a5020", borderRadius:10, padding:24, marginBottom:30 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20, paddingBottom:12, borderBottom:"1px solid #4a3820" }}>
+              <h2 style={{ margin:0, color:"#e8c87a", fontSize:20 }}>Cost Breakdown</h2>
+              <button
+                onClick={()=>exportPDF(breakdown, items)}
+                style={{ background:"linear-gradient(135deg,#2a3a20,#3a5020)", border:"1px solid #6a8a40", borderRadius:6, color:"#a0c870", fontSize:12, padding:"8px 18px", cursor:"pointer", letterSpacing:"0.08em", display:"flex", alignItems:"center", gap:6 }}>
+                ⬇ Export PDF / Print Quote
+              </button>
+            </div>
+
+            {breakdown.lines.map((line,i)=>(
+              <div key={i} style={{ marginBottom:20, paddingBottom:16, borderBottom: i<breakdown.lines.length-1?"1px solid #2a2010":"none" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
+                  <div>
+                    <span style={{ color:"#e8c87a", fontSize:14, fontWeight:"bold" }}>{line.label}</span>
+                    <span style={{ color:"#6a5a3a", fontSize:12, marginLeft:8 }}>({line.qty} pcs)</span>
+                    {line.sizes && line.sizes.length > 0 && (
+                      <span style={{ color:"#7a6a4a", fontSize:11, marginLeft:8, background:"#2a2010", padding:"1px 7px", borderRadius:10, border:"1px solid #4a3820" }}>
+                        {line.sizes.join(" · ")}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ textAlign:"right" }}>
+                    <div style={{ color:"#e8c87a", fontSize:15, fontWeight:"bold", marginBottom:4 }}>${line.sub.toFixed(2)}</div>
+                    <CostBadge amount={line.cpp} label="/ shirt" />
+                  </div>
+                </div>
+                {/* SKUs — stacked with per-size qty */}
+                {line.skus && line.skus[0]?.sku !== "???-???-???-???" && line.skus[0]?.sku && (
+                  <div style={{ marginBottom:8, paddingLeft:12, display:"flex", flexDirection:"column", gap:3 }}>
+                    {line.skus.map((entry,k)=>(
+                      <div key={k} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", background:"#110d06", border:"1px solid #2a2010", borderRadius:3, padding:"3px 10px" }}>
+                        <span style={{ fontFamily:"monospace", fontSize:11, color:"#a08040", letterSpacing:"0.04em" }}>{entry.sku}</span>
+                        <span style={{ fontFamily:"monospace", fontSize:12, color:"#c0a060", fontWeight:"bold", marginLeft:16 }}>{entry.qty} pcs</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {line.rows.map((r,j)=>(
+                  <div key={j} style={{ display:"flex", justifyContent:"space-between", padding:"2px 12px", color:r.warn?"#e07050":r.info?"#6a8a5a":"#9a8a6a", fontSize:12 }}>
+                    <span>{r.d}</span>
+                    {r.a>0 && <span>${r.a.toFixed(2)}</span>}
+                  </div>
+                ))}
+              </div>
+            ))}
+
+            {/* Grand total */}
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", paddingTop:16, borderTop:"1px solid #6a5020" }}>
+              <div>
+                <div style={{ color:"#8a7a5a", textTransform:"uppercase", letterSpacing:"0.12em", fontSize:12 }}>Total Print Charges</div>
+                <div style={{ color:"#5a5040", fontSize:11, marginTop:2 }}>garments not included</div>
+              </div>
+              <div style={{ textAlign:"right" }}>
+                <div style={{ color:"#e8c87a", fontSize:32, fontWeight:"bold", marginBottom:6 }}>${breakdown.grand.toFixed(2)}</div>
+                <CostBadge amount={breakdown.avgCpp} label="avg / shirt" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Footer notes */}
+        <div style={{ background:"#0e0a04", border:"1px solid #2a2010", borderRadius:6, padding:16, fontSize:11, color:"#5a5040", lineHeight:1.7 }}>
+          <strong style={{ color:"#6a5a3a" }}>Notes:</strong> Prices per print location. Garments priced separately.
+          Hoodies auto-flagged as fleece (+$0.35/pc). Pocket tees auto-flagged for sleeve surcharge (+$1.00/pc).
+          Shared ink colors across styles are de-duplicated for screen charges.
+          Screens waived at 72+ combined pcs. Contact Lost Art for shipping, embroidery, CMYK, and jacket pricing.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>  { styleCode:"BWHH",  styleName:"Best West Heritage Hoodie",     appCode:"VIT",  garmentType:"Fleece"   },
+  { styleCode:"CLH",   styleName:"Cabin Life Hoodie",             appCode:"VIT",  garmentType:"Fleece"   },
+];
+
+const COLORWAYS = {
+  CCT:   [
+    { garmentColor:"Ivory",       inkColor:"Cardinal Red"       },
+    { garmentColor:"Brick",       inkColor:"Pantone 2006"       },
+    { garmentColor:"Terracotta",  inkColor:"Brick"              },
+    { garmentColor:"Mustard",     inkColor:"Maroon"             },
+    { garmentColor:"Hemp",        inkColor:"Cream"              },
+    { garmentColor:"Denim",       inkColor:"Weema-Tuck Green"   },
+  ],
+  BWHT:  [
+    { garmentColor:"Ivory",       inkColor:"Pantone 425"        },
+    { garmentColor:"Brick",       inkColor:"Pantone 2006"       },
+    { garmentColor:"Terracotta",  inkColor:"Brick"              },
+    { garmentColor:"Mustard",     inkColor:"Maroon"             },
+    { garmentColor:"Hemp",        inkColor:"Cream"              },
+    { garmentColor:"Denim",       inkColor:"Weema-Tuck Green"   },
+  ],
+  BWCT:  [
+    { garmentColor:"Ivory",       inkColor:"Pantone 425"        },
+    { garmentColor:"Brick",       inkColor:"Pantone 2006"       },
+    { garmentColor:"Terracotta",  inkColor:"Brick"              },
+    { garmentColor:"Mustard",     inkColor:"Maroon"             },
+    { garmentColor:"Hemp",        inkColor:"Cream"              },
+    { garmentColor:"Denim",       inkColor:"Weema-Tuck Green"   },
+  ],
+  CLT:   [
+    { garmentColor:"Ivory",       inkColor:"Pantone 425"        },
+    { garmentColor:"Brick",       inkColor:"Pantone 2006"       },
+    { garmentColor:"Terracotta",  inkColor:"Brick"              },
+    { garmentColor:"Mustard",     inkColor:"Maroon"             },
+    { garmentColor:"Hemp",        inkColor:"Cream"              },
+    { garmentColor:"Denim",       inkColor:"Weema-Tuck Green"   },
+  ],
+  BWBPT: [
+    { garmentColor:"Ivory",       inkColor:"Cardinal Red"       },
+    { garmentColor:"Pepper",      inkColor:"Cream"              },
+    { garmentColor:"Espresso",    inkColor:"Pantone 7565"       },
+    { garmentColor:"Blue Spruce", inkColor:"Pantone 2006"       },
+    { garmentColor:"Gray",        inkColor:"Puff Dark Green"    },
+  ],
+  BWHPT: [
+    { garmentColor:"Ivory",       inkColor:"Pantone 425"        },
+    { garmentColor:"Pepper",      inkColor:"Cream"              },
+    { garmentColor:"Espresso",    inkColor:"Pantone 7565"       },
+    { garmentColor:"Blue Spruce", inkColor:"Pantone 2006"       },
+    { garmentColor:"Gray",        inkColor:"Puff Dark Green"    },
+  ],
+  CPT:   [
+    { garmentColor:"Ivory",       inkColor:"Pantone 425"        },
+    { garmentColor:"Pepper",      inkColor:"Cream"              },
+    { garmentColor:"Espresso",    inkColor:"Pantone 7565"       },
+    { garmentColor:"Blue Spruce", inkColor:"Pantone 2006"       },
+    { garmentColor:"Gray",        inkColor:"Puff Dark Green"    },
+  ],
+  BWCH:  [
+    { garmentColor:"Gardenia",     inkColor:"Pantone 425"       },
+    { garmentColor:"Eucalyptus",   inkColor:"Cream"             },
+    { garmentColor:"Charcoal",     inkColor:"Cream"             },
+    { garmentColor:"Coyote Brown", inkColor:"Bears Navy"        },
+    { garmentColor:"Desert Rose",  inkColor:"Cream"             },
+  ],
+  BWHH:  [
+    { garmentColor:"Gardenia",     inkColor:"Pantone 425"       },
+    { garmentColor:"Eucalyptus",   inkColor:"Cream"             },
+    { garmentColor:"Charcoal",     inkColor:"Cream"             },
+    { garmentColor:"Coyote Brown", inkColor:"Bears Navy"        },
+    { garmentColor:"Desert Rose",  inkColor:"Cream"             },
+  ],
+  CLH:   [
+    { garmentColor:"Gardenia",     inkColor:"Pantone 425"       },
+    { garmentColor:"Eucalyptus",   inkColor:"Cream"             },
+    { garmentColor:"Charcoal",     inkColor:"Cream"             },
+    { garmentColor:"Coyote Brown", inkColor:"Bears Navy"        },
+    { garmentColor:"Desert Rose",  inkColor:"Cream"             },
+  ],
+};
+
+// ── Pricing ───────────────────────────────────────────────────────────────────
+const PRINT_RATES_FALLBACK = [
+  { min:12,  max:35,   rates:[3.83,5.36,7.50,10.50,null, null ] },
+  { min:36,  max:71,   rates:[2.76,3.87,5.41,7.58, 10.99,15.94] },
+  { min:72,  max:144,  rates:[1.83,2.47,3.33,4.50, 6.52, 9.45 ] },
+  { min:145, max:500,  rates:[1.23,1.66,2.25,3.03, 4.40, 6.38 ] },
+  { min:501, max:1000, rates:[1.02,1.33,1.72,2.24, null, null ] },
+];
+
+const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4JcxVnp5ZdnMK9SJmJlygJgSYirSSSkAR2fW4rcaNZpWk9jZ3BJc1WsZ2Vi-7iBFPjYJKoE4I0W-0/pub?gid=0&single=true&output=csv";
 
 function parseCSVRates(csv) {
   const lines = csv.trim().split("\n").slice(1);

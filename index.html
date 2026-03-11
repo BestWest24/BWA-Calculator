@@ -643,7 +643,8 @@ function App() {
     const lines = Object.values(lineMap);
     if (!lines.length) { alert("No items with sizes selected."); return; }
 
-    // Build print cost lookup per appCode
+    // Build print cost lookup keyed by "appCode::garmentColor" to avoid
+    // collisions when multiple colorways share the same appCode (e.g. two VIT hoodies)
     const printCostMap = {};
     if (breakdown) {
       breakdown.lines.forEach(line => {
@@ -656,7 +657,12 @@ function App() {
         });
         if (item) {
           const cat = RAW_CATALOG.find(c => c.styleCode === item.styleCode);
-          if (cat) printCostMap[cat.appCode] = (printCostMap[cat.appCode] || 0) + line.cpp;
+          const cws = COLORWAYS[item.styleCode]||[];
+          const cw = cws[parseInt(item.colorwayIndex)];
+          if (cat && cw) {
+            const key = `${cat.appCode}::${cw.garmentColor}`;
+            printCostMap[key] = (printCostMap[key] || 0) + line.cpp;
+          }
         }
       });
     }
@@ -674,7 +680,7 @@ function App() {
         ? activeSizes.reduce((s,sz) => s + getBlankRate(line.appCode, line.supplier, sz) * (line.sizes[sz]||0), 0) / qty
         : 0;
       const blankTotal = activeSizes.reduce((s,sz) => s + getBlankRate(line.appCode, line.supplier, sz) * (line.sizes[sz]||0), 0);
-      const printCpp = printCostMap[line.appCode] || 0;
+      const printCpp = printCostMap[`${line.appCode}::${line.garmentColor}`] || 0;
       const printTotal = printCpp * qty;
       const landedCpp = blankCpp + printCpp;
       const landedTotal = blankTotal + printTotal;

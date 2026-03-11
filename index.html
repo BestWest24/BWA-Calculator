@@ -202,6 +202,9 @@ const SPECIALTY = [
   { label:"Glow in the Dark (+$1.25)", value:1.25 },
 ];
 
+// Styles that default to 2 print locations (front + back)
+const TWO_LOCATION_STYLES = new Set(["BWBPT","CCT","CLH","BWHH"]);
+
 function getRate(totalQty, colors) {
   if (colors < 1 || colors > 6) return null;
   const b = PRINT_RATES.find(r => totalQty >= r.min && totalQty <= r.max);
@@ -426,8 +429,10 @@ function ItemRow({ item, onChange, onRemove, onClear, groupQty, index }) {
       <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:12, alignItems:"flex-end" }}>
         <div style={{ flex:"2 1 200px" }}>
           <label style={L}>Style</label>
-          <select style={SE} value={item.styleCode} onChange={e=>onChange({...item, styleCode:e.target.value, colorwayIndex:""})}>
-            <option value="">— Select Style —</option>
+          <select style={SE} value={item.styleCode} onChange={e=>{
+            const code = e.target.value;
+            onChange({...item, styleCode:code, colorwayIndex:"", printLocations: TWO_LOCATION_STYLES.has(code) ? 2 : 1});
+          }}>            <option value="">— Select Style —</option>
             {RAW_CATALOG.map(c=>(
               <option key={c.styleCode} value={c.styleCode}>{c.styleName} ({c.styleCode} / {c.appCode})</option>
             ))}

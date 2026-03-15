@@ -255,11 +255,13 @@ function exportPDF(breakdown, items) {
       `<tr><td style="padding:2px 8px 2px 24px;color:${r.warn?"#c0392b":r.info?"#27ae60":"#555"};font-size:13px">${r.d}</td><td style="padding:2px 8px;text-align:right;font-size:13px;color:${r.warn?"#c0392b":r.info?"#27ae60":"#555"}">${r.a>0?"$"+r.a.toFixed(2):""}</td></tr>`
     ).join("");
     return `
+      <tbody class="line-block">
       <tr style="background:#f9f5ee">
         <td style="padding:8px;font-weight:bold;font-size:15px;border-top:1px solid #d4c4a0">${line.label}<span style="font-weight:normal;color:#888;font-size:13px;margin-left:8px">(${line.qty} pcs${line.numSizes > 1 ? ` · ${line.qtyPerSize}/size × ${line.numSizes} sizes` : ""})</span>${line.sizes&&line.sizes.length>0?`<span style="font-size:12px;color:#8a6030;background:#f5efe0;border:1px solid #d4c4a0;border-radius:10px;padding:1px 7px;margin-left:6px">${line.sizes.join(" · ")}</span>`:""}<br><span style="font-family:monospace;font-size:12px;color:#8a6030;font-weight:normal">${(line.skus||[]).map(e=>e.sku+" (" +e.qty+")").join("  ·  ")}</span></td>
         <td style="padding:8px;text-align:right;font-weight:bold;font-size:15px;border-top:1px solid #d4c4a0">$${line.sub.toFixed(2)}<br><span style="font-size:12px;color:#8a6030;font-weight:normal">$${line.cpp.toFixed(2)}/shirt</span></td>
       </tr>
-      ${detailRows}`;
+      ${detailRows}
+      </tbody>`;
   }).join("");
 
   const html = `<!DOCTYPE html>
@@ -273,6 +275,8 @@ function exportPDF(breakdown, items) {
   .page { max-width: 720px; margin: 0 auto; }
   table { width: 100%; border-collapse: collapse; }
   .terms { font-size: 9px; line-height: 1.6; color: #777; white-space: pre-line; border-top: 1px solid #ccc; padding-top: 12px; margin-top: 20px; }
+  .line-block { page-break-inside: avoid; break-inside: avoid; }
+  .summary-block { page-break-after: avoid; break-after: avoid; }
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 </style>
 </head>
@@ -718,6 +722,9 @@ function App() {
   body { font-family: Georgia, serif; color: #222; margin: 0; padding: 0; }
   .page { max-width: 900px; margin: 0 auto; }
   table { width: 100%; border-collapse: collapse; }
+  tr { page-break-inside: avoid; break-inside: avoid; }
+  thead { display: table-header-group; }
+  tfoot { display: table-footer-group; }
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 </style>
 </head>
@@ -875,6 +882,9 @@ function App() {
   body { font-family: Georgia, serif; color: #222; margin: 0; padding: 0; }
   .page { max-width: 960px; margin: 0 auto; }
   table { width: 100%; border-collapse: collapse; }
+  tr { page-break-inside: avoid; break-inside: avoid; }
+  thead { display: table-header-group; }
+  tfoot { display: table-footer-group; }
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 </style>
 </head>

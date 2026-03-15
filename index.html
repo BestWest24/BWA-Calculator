@@ -818,6 +818,144 @@ function App() {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
 
+
+  const exportReceivingSheet = () => {
+    const today = new Date().toLocaleDateString("en-US", { year:"numeric", month:"long", day:"numeric" });
+    const sheetNum = "RS-" + Date.now().toString().slice(-6);
+    const sizeOrder = ["S","M","L","XL","2XL","3XL"];
+
+    const lineMap = {};
+    items.forEach(item => {
+      const cat = RAW_CATALOG.find(c => c.styleCode === item.styleCode);
+      if (!cat) return;
+      const cws = COLORWAYS[item.styleCode] || [];
+      const cw = cws[parseInt(item.colorwayIndex)];
+      if (!cw) return;
+      const sizeMap = item.sizes || {};
+      const activeSizes = Object.entries(sizeMap).filter(([,v]) => (parseInt(v)||0) > 0);
+      if (!activeSizes.length) return;
+      const key = `${cat.appCode}::${cw.garmentColor}`;
+      if (!lineMap[key]) lineMap[key] = { appCode: cat.appCode, styleName: cat.styleName, garmentColor: cw.garmentColor, inkColor: cw.inkColor, sizes: {} };
+      activeSizes.forEach(([sz, v]) => {
+        lineMap[key].sizes[sz] = (lineMap[key].sizes[sz] || 0) + (parseInt(v)||0);
+      });
+    });
+
+    const lines = Object.values(lineMap);
+    if (!lines.length) { alert("No items with sizes selected."); return; }
+
+    let grandQty = 0;
+
+    const rowsHtml = lines.map((line, idx) => {
+      const activeSizes = sizeOrder.filter(sz => (line.sizes[sz]||0) > 0);
+      const qty = activeSizes.reduce((s,sz) => s + (line.sizes[sz]||0), 0);
+      grandQty += qty;
+      const sizeCells = sizeOrder.map(sz =>
+        `<td style="padding:8px 10px;text-align:center;font-size:14px;border:1px solid #ddd;${(line.sizes[sz]||0)>0?"font-weight:bold;color:#222":"color:#ccc"}">${(line.sizes[sz]||0) > 0 ? line.sizes[sz] : "\u2014"}</td>`
+      ).join("");
+      const bg = idx % 2 === 0 ? "#ffffff" : "#f9f6f0";
+      return `<tr style="background:${bg}">
+        <td style="padding:8px 10px;font-size:14px;border:1px solid #ddd;font-weight:bold">${line.styleName}</td>
+        <td style="padding:8px 10px;font-size:13px;border:1px solid #ddd;color:#666">${line.appCode}</td>
+        <td style="padding:8px 10px;font-size:14px;border:1px solid #ddd">${line.garmentColor}</td>
+        <td style="padding:8px 10px;font-size:13px;border:1px solid #ddd;color:#8a6030;font-style:italic">${line.inkColor}</td>
+        ${sizeCells}
+        <td style="padding:8px 10px;text-align:center;font-size:15px;border:1px solid #ddd;font-weight:bold;color:#2c2c2c">${qty}</td>
+        <td style="padding:8px 10px;border:1px solid #ddd;background:#fff8ee"></td>
+      </tr>`;
+    }).join("");
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Blank Receiving Sheet ${sheetNum}</title>
+<style>
+  @page { margin: 14mm 12mm; }
+  body { font-family: Georgia, serif; color: #222; margin: 0; padding: 0; }
+  .page { max-width: 960px; margin: 0 auto; }
+  table { width: 100%; border-collapse: collapse; }
+  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <table style="margin-bottom:16px">
+    <tr>
+      <td style="vertical-align:top">
+        <div style="font-size:22px;font-weight:bold;color:#2c2c2c">Best West Apparel</div>
+        <div style="font-size:12px;color:#888;margin-top:2px">bestwestapparel.com</div>
+      </td>
+      <td style="text-align:right;vertical-align:top">
+        <div style="font-size:20px;font-weight:bold;color:#8a6030">Blank Receiving Sheet</div>
+        <div style="font-size:12px;color:#888;margin-top:2px">For: <strong style="color:#333">Lost Art Design + Print</strong></div>
+        <div style="font-size:11px;color:#aaa;margin-top:3px">Sheet # ${sheetNum} \u00b7 ${today}</div>
+      </td>
+    </tr>
+  </table>
+  <div style="height:2px;background:linear-gradient(90deg,#8a6030,#d4c4a0,transparent);margin-bottom:16px"></div>
+  <table style="margin-bottom:10px;background:#faf7f0;border:1px solid #d4c4a0;border-radius:6px">
+    <tr>
+      <td style="padding:12px 20px">
+        <div style="font-size:11px;color:#8a7a5a;text-transform:uppercase;letter-spacing:0.1em">Total Pieces Enclosed</div>
+        <div style="font-size:30px;font-weight:bold;color:#2c2c2c">${grandQty} pcs</div>
+      </td>
+      <td style="padding:12px 20px">
+        <div style="font-size:11px;color:#8a7a5a;text-transform:uppercase;letter-spacing:0.1em">Total Styles</div>
+        <div style="font-size:30px;font-weight:bold;color:#2c2c2c">${lines.length}</div>
+      </td>
+      <td style="padding:12px 20px;text-align:right">
+        <div style="font-size:11px;color:#8a7a5a;text-transform:uppercase;letter-spacing:0.1em">Instructions</div>
+        <div style="font-size:13px;color:#555;margin-top:2px">Please verify piece count on receipt.</div>
+        <div style="font-size:12px;color:#999">Contact hello@bestwestapparel.com with any discrepancies.</div>
+      </td>
+    </tr>
+  </table>
+  <table style="margin-bottom:24px;border:1px solid #d4c4a0">
+    <thead>
+      <tr style="background:#8a6030;color:#fff">
+        <th style="padding:9px 10px;text-align:left">Style</th>
+        <th style="padding:9px 10px;text-align:left">Code</th>
+        <th style="padding:9px 10px;text-align:left">Garment Color</th>
+        <th style="padding:9px 10px;text-align:left">Ink Color</th>
+        <th style="padding:9px 10px;text-align:center">S</th>
+        <th style="padding:9px 10px;text-align:center">M</th>
+        <th style="padding:9px 10px;text-align:center">L</th>
+        <th style="padding:9px 10px;text-align:center">XL</th>
+        <th style="padding:9px 10px;text-align:center">2XL</th>
+        <th style="padding:9px 10px;text-align:center">3XL</th>
+        <th style="padding:9px 10px;text-align:center">Total</th>
+        <th style="padding:9px 10px;text-align:center">\u2713 Received</th>
+      </tr>
+    </thead>
+    <tbody>${rowsHtml}</tbody>
+    <tfoot>
+      <tr style="background:#f0ebe0;border-top:2px solid #c0a040;font-weight:bold">
+        <td colspan="10" style="padding:10px;font-size:14px;color:#5a4010;text-transform:uppercase;letter-spacing:0.06em">Total</td>
+        <td style="padding:10px;text-align:center;font-size:16px;color:#2c2c2c">${grandQty}</td>
+        <td style="padding:10px"></td>
+      </tr>
+    </tfoot>
+  </table>
+  <div style="font-size:11px;color:#999;border-top:1px solid #ddd;padding-top:10px;line-height:1.7">
+    This sheet is for receiving and production reference only. No pricing information is included.
+    Please confirm garment counts match before beginning production. Thank you \u2014 Best West Apparel.
+  </div>
+</div>
+</body>
+</html>`;
+
+    const blob = new Blob([html], { type:"text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ReceivingSheet-${sheetNum}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
+
   const calculate = () => {
     const charged = new Set();
     let grand = 0;
@@ -1017,6 +1155,9 @@ function App() {
           </button>
           <button onClick={exportBlankPO} style={{ flex:1, padding:14, background:"linear-gradient(135deg,#1a3a20,#2a6030)", border:"1px solid #4a8a50", borderRadius:8, color:"#a0e0a0", fontSize:13, fontWeight:"bold", letterSpacing:"0.1em", textTransform:"uppercase", cursor:"pointer" }}>
             ⬇ Export Blank PO
+          </button>
+          <button onClick={exportReceivingSheet} style={{ flex:1, padding:14, background:"linear-gradient(135deg,#1a2a3a,#203050)", border:"1px solid #4a6a8a", borderRadius:8, color:"#a0c8e0", fontSize:13, fontWeight:"bold", letterSpacing:"0.1em", textTransform:"uppercase", cursor:"pointer" }}>
+            ⬇ Receiving Sheet
           </button>
         </div>
 

@@ -115,6 +115,46 @@ const COLORWAYS = {
   ],
 };
 
+// ── Print Design Map ─────────────────────────────────────────────────────────
+// Maps each style to its print designs (Lost Art design IDs)
+// Used to pool quantities by design for correct bracket pricing
+const STYLE_DESIGNS = {
+  CCT:   [
+    { id:"4A", name:"Cardinal",         location:"front",  isPocket:false },
+    { id:"1B", name:"Large Pill Logo",  location:"back",   isPocket:false },
+  ],
+  BWHT:  [
+    { id:"3",  name:"Stacked Best West",location:"front",  isPocket:false },
+  ],
+  BWCT:  [
+    { id:"5A", name:"Best West Apparel",location:"front",  isPocket:false },
+  ],
+  CLT:   [
+    { id:"6",  name:"Cabin Life Badge", location:"back",   isPocket:false },
+  ],
+  BWBPT: [
+    { id:"1A", name:"BW Horizontal",    location:"pocket", isPocket:true  },
+    { id:"1B", name:"Large Pill Logo",  location:"back",   isPocket:false },
+  ],
+  BWHPT: [
+    { id:"2",  name:"Heritage Patch",   location:"pocket", isPocket:true  },
+  ],
+  CPT:   [
+    { id:"4A", name:"Cardinal",         location:"pocket", isPocket:true  },
+  ],
+  BWCH:  [
+    { id:"5A", name:"Best West Apparel",location:"front",  isPocket:false },
+  ],
+  BWHH:  [
+    { id:"1A", name:"BW Horizontal",    location:"front",  isPocket:false },
+    { id:"1B", name:"Large Pill Logo",  location:"back",   isPocket:false },
+  ],
+  CLH:   [
+    { id:"4A", name:"Cardinal",         location:"pocket", isPocket:true  },
+    { id:"6",  name:"Cabin Life Badge", location:"back",   isPocket:false },
+  ],
+};
+
 // ── Pricing ───────────────────────────────────────────────────────────────────
 const PRINT_RATES_FALLBACK = [
   { min:12,  max:35,   rates:[3.83,5.36,7.50,10.50,null, null ] },
@@ -270,20 +310,14 @@ function exportPDF(breakdown, items) {
 <meta charset="utf-8">
 <title>Lost Art Design + Print — Order Estimate ${orderNum}</title>
 <style>
-  @page { margin: 18mm 16mm; size: letter; }
+  @page { margin: 18mm 16mm; }
   body { font-family: Georgia, serif; color: #222; margin: 0; padding: 0; }
   .page { max-width: 720px; margin: 0 auto; }
   table { width: 100%; border-collapse: collapse; }
-  thead { display: table-header-group; }
-  tfoot { display: table-footer-group; }
-  tbody.line-block { page-break-inside: avoid; break-inside: avoid; }
-  .no-break { page-break-inside: avoid; break-inside: avoid; }
-  .page-break-before { page-break-before: always; break-before: page; }
   .terms { font-size: 9px; line-height: 1.6; color: #777; white-space: pre-line; border-top: 1px solid #ccc; padding-top: 12px; margin-top: 20px; }
-  @media print {
-    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .page-break-before { page-break-before: always; break-before: page; }
-  }
+  .line-block { page-break-inside: avoid; break-inside: avoid; }
+  .summary-block { page-break-after: avoid; break-after: avoid; }
+  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 </style>
 </head>
 <body>
@@ -311,7 +345,7 @@ function exportPDF(breakdown, items) {
   <div style="height:2px;background:linear-gradient(90deg,#8a6030,#d4c4a0,transparent);margin-bottom:20px"></div>
 
   <!-- Summary banner -->
-  <table class="no-break" style="margin-bottom:20px;background:#faf7f0;border:1px solid #d4c4a0;border-radius:6px">
+  <table style="margin-bottom:20px;background:#faf7f0;border:1px solid #d4c4a0;border-radius:6px">
     <tr>
       <td style="padding:12px 16px">
         <div style="font-size:12px;color:#8a7a5a;text-transform:uppercase;letter-spacing:0.1em">Total Combined Quantity</div>
@@ -343,7 +377,7 @@ function exportPDF(breakdown, items) {
   </table>
 
   <!-- Notes box -->
-  <div class="no-break" style="background:#faf7f0;border:1px solid #d4c4a0;border-radius:6px;padding:14px;font-size:13px;color:#555;line-height:1.7;margin-bottom:20px">
+  <div style="background:#faf7f0;border:1px solid #d4c4a0;border-radius:6px;padding:14px;font-size:13px;color:#555;line-height:1.7;margin-bottom:20px">
     <strong style="color:#4a3010">Notes:</strong> Prices per print location. Garments priced separately.
     Hoodies carry a fleece surcharge (+$0.35/pc). Pocket tees carry a sleeve surcharge (+$1.00/pc).
     Shared ink colors across styles are de-duplicated for screen charges.
@@ -361,7 +395,7 @@ function exportPDF(breakdown, items) {
   </table>
 
   <!-- Terms -->
-  <div class="terms page-break-before">${TERMS}</div>
+  <div class="terms">${TERMS}</div>
 
 </div>
 </body>
@@ -592,9 +626,15 @@ function App() {
 
   const totalQty = items.reduce((s,it)=>s+getItemEffectiveQty(it),0);
 
-  // Build per-ink-color group quantities for bracket pricing
-  // Items sharing the same styleCode AND ink color pool their qty.
-  // Same ink color on a different style does NOT qualify — different style = different run.
+  // Build per-DESIGN group quantities for bracket pricing
+  // Lost Art prices by print design across ALL garments sharing that design,
+  // not by style/colorway. This matches how their invoices are structured.
+  const getDesigns = (item) => {
+    if (!item.styleCode) return [];
+    return STYLE_DESIGNS[item.styleCode] || [];
+  };
+
+  // For bracket pricing display — still show ink key for the qty banner
   const getInkKey = (item) => {
     const cws = item.styleCode ? (COLORWAYS[item.styleCode]||[]) : [];
     const cw = cws[parseInt(item.colorwayIndex)];
@@ -602,6 +642,18 @@ function App() {
     return item.styleCode ? `${item.styleCode}::${inkPart}` : `__uid_${item.id}__`;
   };
 
+  // Pool quantities by design ID across all items
+  const designGroupQty = {};
+  items.forEach(item => {
+    const qty = getItemEffectiveQty(item);
+    if (!qty) return;
+    const designs = getDesigns(item);
+    designs.forEach(d => {
+      designGroupQty[d.id] = (designGroupQty[d.id]||0) + qty;
+    });
+  });
+
+  // Keep inkGroupQty for the qty banner display
   const inkGroupQty = {};
   items.forEach(item => {
     const qty = getItemEffectiveQty(item);
@@ -728,6 +780,9 @@ function App() {
   body { font-family: Georgia, serif; color: #222; margin: 0; padding: 0; }
   .page { max-width: 900px; margin: 0 auto; }
   table { width: 100%; border-collapse: collapse; }
+  tr { page-break-inside: avoid; break-inside: avoid; }
+  thead { display: table-header-group; }
+  tfoot { display: table-footer-group; }
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 </style>
 </head>
@@ -828,6 +883,147 @@ function App() {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
 
+
+  const exportReceivingSheet = () => {
+    const today = new Date().toLocaleDateString("en-US", { year:"numeric", month:"long", day:"numeric" });
+    const sheetNum = "RS-" + Date.now().toString().slice(-6);
+    const sizeOrder = ["S","M","L","XL","2XL","3XL"];
+
+    const lineMap = {};
+    items.forEach(item => {
+      const cat = RAW_CATALOG.find(c => c.styleCode === item.styleCode);
+      if (!cat) return;
+      const cws = COLORWAYS[item.styleCode] || [];
+      const cw = cws[parseInt(item.colorwayIndex)];
+      if (!cw) return;
+      const sizeMap = item.sizes || {};
+      const activeSizes = Object.entries(sizeMap).filter(([,v]) => (parseInt(v)||0) > 0);
+      if (!activeSizes.length) return;
+      const key = `${cat.appCode}::${cw.garmentColor}`;
+      if (!lineMap[key]) lineMap[key] = { appCode: cat.appCode, styleName: cat.styleName, garmentColor: cw.garmentColor, inkColor: cw.inkColor, sizes: {} };
+      activeSizes.forEach(([sz, v]) => {
+        lineMap[key].sizes[sz] = (lineMap[key].sizes[sz] || 0) + (parseInt(v)||0);
+      });
+    });
+
+    const lines = Object.values(lineMap);
+    if (!lines.length) { alert("No items with sizes selected."); return; }
+
+    let grandQty = 0;
+
+    const rowsHtml = lines.map((line, idx) => {
+      const activeSizes = sizeOrder.filter(sz => (line.sizes[sz]||0) > 0);
+      const qty = activeSizes.reduce((s,sz) => s + (line.sizes[sz]||0), 0);
+      grandQty += qty;
+      const sizeCells = sizeOrder.map(sz =>
+        `<td style="padding:8px 10px;text-align:center;font-size:14px;border:1px solid #ddd;${(line.sizes[sz]||0)>0?"font-weight:bold;color:#222":"color:#ccc"}">${(line.sizes[sz]||0) > 0 ? line.sizes[sz] : "\u2014"}</td>`
+      ).join("");
+      const bg = idx % 2 === 0 ? "#ffffff" : "#f9f6f0";
+      return `<tr style="background:${bg}">
+        <td style="padding:8px 10px;font-size:14px;border:1px solid #ddd;font-weight:bold">${line.styleName}</td>
+        <td style="padding:8px 10px;font-size:13px;border:1px solid #ddd;color:#666">${line.appCode}</td>
+        <td style="padding:8px 10px;font-size:14px;border:1px solid #ddd">${line.garmentColor}</td>
+        <td style="padding:8px 10px;font-size:13px;border:1px solid #ddd;color:#8a6030;font-style:italic">${line.inkColor}</td>
+        ${sizeCells}
+        <td style="padding:8px 10px;text-align:center;font-size:15px;border:1px solid #ddd;font-weight:bold;color:#2c2c2c">${qty}</td>
+        <td style="padding:8px 10px;border:1px solid #ddd;background:#fff8ee"></td>
+      </tr>`;
+    }).join("");
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Blank Receiving Sheet ${sheetNum}</title>
+<style>
+  @page { margin: 14mm 12mm; }
+  body { font-family: Georgia, serif; color: #222; margin: 0; padding: 0; }
+  .page { max-width: 960px; margin: 0 auto; }
+  table { width: 100%; border-collapse: collapse; }
+  tr { page-break-inside: avoid; break-inside: avoid; }
+  thead { display: table-header-group; }
+  tfoot { display: table-footer-group; }
+  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <table style="margin-bottom:16px">
+    <tr>
+      <td style="vertical-align:top">
+        <div style="font-size:22px;font-weight:bold;color:#2c2c2c">Best West Apparel</div>
+        <div style="font-size:12px;color:#888;margin-top:2px">bestwestapparel.com</div>
+      </td>
+      <td style="text-align:right;vertical-align:top">
+        <div style="font-size:20px;font-weight:bold;color:#8a6030">Blank Receiving Sheet</div>
+        <div style="font-size:12px;color:#888;margin-top:2px">For: <strong style="color:#333">Lost Art Design + Print</strong></div>
+        <div style="font-size:11px;color:#aaa;margin-top:3px">Sheet # ${sheetNum} \u00b7 ${today}</div>
+      </td>
+    </tr>
+  </table>
+  <div style="height:2px;background:linear-gradient(90deg,#8a6030,#d4c4a0,transparent);margin-bottom:16px"></div>
+  <table style="margin-bottom:10px;background:#faf7f0;border:1px solid #d4c4a0;border-radius:6px">
+    <tr>
+      <td style="padding:12px 20px">
+        <div style="font-size:11px;color:#8a7a5a;text-transform:uppercase;letter-spacing:0.1em">Total Pieces Enclosed</div>
+        <div style="font-size:30px;font-weight:bold;color:#2c2c2c">${grandQty} pcs</div>
+      </td>
+      <td style="padding:12px 20px">
+        <div style="font-size:11px;color:#8a7a5a;text-transform:uppercase;letter-spacing:0.1em">Total Styles</div>
+        <div style="font-size:30px;font-weight:bold;color:#2c2c2c">${lines.length}</div>
+      </td>
+      <td style="padding:12px 20px;text-align:right">
+        <div style="font-size:11px;color:#8a7a5a;text-transform:uppercase;letter-spacing:0.1em">Instructions</div>
+        <div style="font-size:13px;color:#555;margin-top:2px">Please verify piece count on receipt.</div>
+        <div style="font-size:12px;color:#999">Contact hello@bestwestapparel.com with any discrepancies.</div>
+      </td>
+    </tr>
+  </table>
+  <table style="margin-bottom:24px;border:1px solid #d4c4a0">
+    <thead>
+      <tr style="background:#8a6030;color:#fff">
+        <th style="padding:9px 10px;text-align:left">Style</th>
+        <th style="padding:9px 10px;text-align:left">Code</th>
+        <th style="padding:9px 10px;text-align:left">Garment Color</th>
+        <th style="padding:9px 10px;text-align:left">Ink Color</th>
+        <th style="padding:9px 10px;text-align:center">S</th>
+        <th style="padding:9px 10px;text-align:center">M</th>
+        <th style="padding:9px 10px;text-align:center">L</th>
+        <th style="padding:9px 10px;text-align:center">XL</th>
+        <th style="padding:9px 10px;text-align:center">2XL</th>
+        <th style="padding:9px 10px;text-align:center">3XL</th>
+        <th style="padding:9px 10px;text-align:center">Total</th>
+        <th style="padding:9px 10px;text-align:center">\u2713 Received</th>
+      </tr>
+    </thead>
+    <tbody>${rowsHtml}</tbody>
+    <tfoot>
+      <tr style="background:#f0ebe0;border-top:2px solid #c0a040;font-weight:bold">
+        <td colspan="10" style="padding:10px;font-size:14px;color:#5a4010;text-transform:uppercase;letter-spacing:0.06em">Total</td>
+        <td style="padding:10px;text-align:center;font-size:16px;color:#2c2c2c">${grandQty}</td>
+        <td style="padding:10px"></td>
+      </tr>
+    </tfoot>
+  </table>
+  <div style="font-size:11px;color:#999;border-top:1px solid #ddd;padding-top:10px;line-height:1.7">
+    This sheet is for receiving and production reference only. No pricing information is included.
+    Please confirm garment counts match before beginning production. Thank you \u2014 Best West Apparel.
+  </div>
+</div>
+</body>
+</html>`;
+
+    const blob = new Blob([html], { type:"text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ReceivingSheet-${sheetNum}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
+
   const calculate = () => {
     const charged = new Set();
     let grand = 0;
@@ -851,7 +1047,7 @@ function App() {
       // Use ink-group qty for bracket pricing, not blind total
       const inkKey = getInkKey(item);
       const groupQty = inkGroupQty[inkKey] || qty;
-      const rate = getRate(groupQty, effectiveColors);
+      const rate = getRate(groupQty, effectiveColors); // kept for fallback only
       const label = cat
         ? `${cat.styleName}${cw?` — ${cw.garmentColor} / ${cw.inkColor}`:""}`
         : `Item #${item.id}`;
@@ -870,44 +1066,82 @@ function App() {
       const rows = [];
       let sub = 0;
 
-      // Print
-      if (rate!==null) {
-        const locs = item.printLocations || 1;
-        const c=rate*qty*locs; sub+=c;
-        rows.push({ d:`Print (${effectiveColors} color${effectiveColors>1?"s":""} × ${qty} @ $${rate.toFixed(2)}${locs===2?" × 2 locations":""}, group qty ${groupQty})`, a:c });
+      // ── Per-design print charges ──────────────────────────────────────────
+      // Each design on this style is priced at the design's pooled qty bracket
+      const styleDesigns = getDesigns(item);
+
+      if (styleDesigns.length === 0) {
+        // Fallback: no design map, use old single-rate logic
+        if (rate!==null) {
+          const locs = item.printLocations || 1;
+          const c=rate*qty*locs; sub+=c;
+          rows.push({ d:`Print (${effectiveColors} color${effectiveColors>1?"s":""} × ${qty} @ $${rate.toFixed(2)}${locs===2?" × 2 locations":""}, group qty ${groupQty})`, a:c });
+        } else {
+          rows.push({ d:`⚠ Print: QUOTE REQUIRED (${effectiveColors} colors, ${groupQty} group qty)`, a:0, warn:true });
+        }
       } else {
-        rows.push({ d:`⚠ Print: QUOTE REQUIRED (${effectiveColors} colors, ${groupQty} group qty)`, a:0, warn:true });
+        styleDesigns.forEach(design => {
+          const dGroupQty = designGroupQty[design.id] || qty;
+          const dRate = getRate(dGroupQty, effectiveColors);
+          const isOversized = item.locationType === "Oversized";
+          const sc = isOversized ? SCREEN_OVERSIZE : SCREEN_NEW;
+
+          if (dRate !== null) {
+            const c = dRate * qty;
+            sub += c;
+            rows.push({ d:`Print — ${design.name} (${design.id}) ${design.location}: ${qty} @ $${dRate.toFixed(2)}, design pool ${dGroupQty} pcs`, a:c });
+          } else {
+            rows.push({ d:`⚠ Print — ${design.name}: QUOTE REQUIRED (${effectiveColors} colors, ${dGroupQty} pool qty)`, a:0, warn:true });
+          }
+
+          // Oversize surcharge per design
+          if (isOversized) {
+            const c = OVERSIZE_SURCHARGE * qty; sub += c;
+            rows.push({ d:`Oversize surcharge — ${design.name} (${qty} × $${OVERSIZE_SURCHARGE})`, a:c });
+          }
+
+          // Sleeve/pocket surcharge per pocket design
+          if (design.isPocket) {
+            const c = SLEEVE_SURCHARGE * qty; sub += c;
+            rows.push({ d:`Pocket/sleeve surcharge — ${design.name} (${qty} × $${SLEEVE_SURCHARGE})`, a:c });
+          }
+
+          // Flash per design location
+          if (item.flash) {
+            const c = FLASH * qty; sub += c;
+            rows.push({ d:`Flash — ${design.name} (${qty} × $${FLASH})`, a:c });
+          }
+
+          // Screen charges per design
+          const designKey = `design_${design.id}`;
+          if (!item.isReprint && dGroupQty < 72) {
+            if (!charged.has(designKey)) {
+              charged.add(designKey);
+              const c = sc; sub += c;
+              rows.push({ d:`Screen charge — ${design.name} (1 × $${sc})`, a:c });
+            } else {
+              rows.push({ d:`Screen charge — ${design.name}: $0 — screen shared`, a:0, info:true });
+            }
+          } else if (item.isReprint) {
+            rows.push({ d:`Screen charge — ${design.name}: $0 — reprint, screens on file`, a:0, info:true });
+          } else {
+            rows.push({ d:`Screen charge — ${design.name}: $0 — waived at 72+ pcs (pool ${dGroupQty})`, a:0, info:true });
+          }
+        });
       }
 
-      // Oversize
-      if (item.locationType==="Oversized") {
-        const c=OVERSIZE_SURCHARGE*qty; sub+=c;
-        rows.push({ d:`Oversize surcharge (${qty} × $${OVERSIZE_SURCHARGE})`, a:c });
-      }
-
-      // Sleeve/pocket
-      if (item.locationType==="Sleeve/Pocket" || isPocket) {
-        const c=SLEEVE_SURCHARGE*qty; sub+=c;
-        rows.push({ d:`Sleeve/pocket surcharge (${qty} × $${SLEEVE_SURCHARGE})`, a:c });
-      }
-
-      // Garment type
+      // Garment type surcharges (once per item, not per design)
       if (gType==="Fleece") {
-        const c=FLEECE_SURCHARGE*qty; sub+=c;
-        rows.push({ d:`Fleece print surcharge (${qty} × $${FLEECE_SURCHARGE})`, a:c });
+        const numDesigns = styleDesigns.length || 1;
+        const c=FLEECE_SURCHARGE*qty*numDesigns; sub+=c;
+        rows.push({ d:`Fleece print surcharge (${qty} × $${FLEECE_SURCHARGE}${numDesigns>1?` × ${numDesigns} designs`:""})`, a:c });
       }
       if (gType==="Polyester") {
         const c=POLY_SURCHARGE*qty; sub+=c;
         rows.push({ d:`Polyester surcharge (${qty} × $${POLY_SURCHARGE})`, a:c });
       }
 
-      // Flash
-      if (item.flash) {
-        const c=FLASH*qty; sub+=c;
-        rows.push({ d:`Flash (${qty} × $${FLASH})`, a:c });
-      }
-
-      // Staging
+      // Staging (once per garment)
       if (item.staging) {
         const c=STAGING*qty; sub+=c;
         rows.push({ d:`Staging (${qty} × $${STAGING})`, a:c });
@@ -923,31 +1157,6 @@ function App() {
       if (item.inkColorChanges>0) {
         const c=item.inkColorChanges*INK_CHANGE; sub+=c;
         rows.push({ d:`Ink color changes (${item.inkColorChanges} × $${INK_CHANGE})`, a:c });
-      }
-
-      // Screen charges
-      if (!item.isReprint && groupQty<72) {
-        const sc = item.locationType==="Oversized" ? SCREEN_OVERSIZE : SCREEN_NEW;
-        let newScreens=0; const names=[];
-
-        if (!charged.has(inkKey)) { charged.add(inkKey); newScreens++; names.push(cw?cw.inkColor:"(unnamed ink)"); }
-
-        for (let i=1;i<item.colors;i++) { newScreens++; names.push(`Extra color ${i}`); }
-
-        if (item.whiteUnderbase && !charged.has("__underbase__")) {
-          charged.add("__underbase__"); newScreens++; names.push("White underbase");
-        }
-
-        if (newScreens>0) {
-          const c=newScreens*sc; sub+=c;
-          rows.push({ d:`Screen charges (${newScreens} × $${sc}: ${names.join(", ")})`, a:c });
-        } else {
-          rows.push({ d:`Screen charges: $0 — ink color shared with prior item`, a:0, info:true });
-        }
-      } else if (item.isReprint) {
-        rows.push({ d:`Screen charges: $0 — reprint, screens on file`, a:0, info:true });
-      } else {
-        rows.push({ d:`Screen charges: $0 — waived at 72+ pcs (group qty ${groupQty})`, a:0, info:true });
       }
 
       grand += sub;
@@ -1027,6 +1236,9 @@ function App() {
           </button>
           <button onClick={exportBlankPO} style={{ flex:1, padding:14, background:"linear-gradient(135deg,#1a3a20,#2a6030)", border:"1px solid #4a8a50", borderRadius:8, color:"#a0e0a0", fontSize:13, fontWeight:"bold", letterSpacing:"0.1em", textTransform:"uppercase", cursor:"pointer" }}>
             ⬇ Export Blank PO
+          </button>
+          <button onClick={exportReceivingSheet} style={{ flex:1, padding:14, background:"linear-gradient(135deg,#1a2a3a,#203050)", border:"1px solid #4a6a8a", borderRadius:8, color:"#a0c8e0", fontSize:13, fontWeight:"bold", letterSpacing:"0.1em", textTransform:"uppercase", cursor:"pointer" }}>
+            ⬇ Receiving Sheet
           </button>
         </div>
 
